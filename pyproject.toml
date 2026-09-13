@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wayland-whisper"
+version = "0.1.0"
+description = "Local, voice-gated Whisper dictation for Wayland"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+dependencies = [
+  "numpy>=1.24",
+  "onnxruntime>=1.17",
+  "pywhispercpp>=1.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+wayland-whisper = "wayland_whisper.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
