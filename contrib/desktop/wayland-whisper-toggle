@@ -2,10 +2,12 @@
 # Toggle / suspend / stop the warm wayland-whisper user service.
 #
 # Master switch: on | off (mirrors nerd-dictation-toggle):
-#   - "on"  enables the service (warm daemon, microphone still closed) and binds
-#           Ctrl+Space in Sway. "off" disables everything so Ctrl+Space goes to
-#           the focused application again.
+#   - "on"  enables the service (warm daemon, microphone still closed) and
+#           binds Ctrl+Space and the pad Enter key ("send") in Sway. "off"
+#           disables everything so both keys go to the focused app again.
 #   - Ctrl+Space (or no argument) opens/closes the microphone only.
+#   - "send" (the pad Enter key) finishes the phrase being dictated, closes
+#           the microphone, then presses Enter for the focused app.
 set -eu
 
 SERVICE=wayland-whisper.service
@@ -18,6 +20,8 @@ TOGGLE_BIN="${TOGGLE_BIN:-$HOME/.local/bin/wayland-whisper-toggle}"
 RUNDIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 COOKIE="$RUNDIR/wayland-whisper.pid"
 AHAKEY="${AHAKEY:-$HOME/git/ahakey-x1/ahakey.sh}"
+AHAKEY_ENV="${AHAKEY_ENV:-$HOME/git/ahakey-x1/.env}"
+FIFO="${FIFO:-$RUNDIR/ahakey-scroll}"
 BIND_CMD="bindsym Ctrl+Space exec --no-startup-id $TOGGLE_BIN"
 
 if [ -f "$FLAGDIR/env" ]; then
@@ -25,6 +29,18 @@ if [ -f "$FLAGDIR/env" ]; then
   set -a
   . "$FLAGDIR/env"
   set +a
+fi
+
+# Pad Enter = "send" (AhaKey pad; device is machine-specific and lives in the
+# AhaKey env). Bound only while the master switch is on, like the old
+# nerd-dictation pad-enter.sh; unbound again when the master switch is off.
+PAD_DEVICE="${PAD_DEVICE:-${AHAKEY_SWAY_DEVICE:-}}"
+if [ -z "$PAD_DEVICE" ] && [ -f "$AHAKEY_ENV" ]; then
+  PAD_DEVICE=$(awk -F= '/^AHAKEY_SWAY_DEVICE=/{print $2; exit}' "$AHAKEY_ENV")
+fi
+PAD_BIND_CMD=""
+if [ -n "$PAD_DEVICE" ]; then
+  PAD_BIND_CMD="bindsym --input-device=$PAD_DEVICE --no-repeat Return exec --no-startup-id $TOGGLE_BIN send"
 fi
 
 mkdir -p "$(dirname "$LOG")" "$FLAGDIR" "$(dirname "$SWAYBIND")"
@@ -47,13 +63,23 @@ bind_mic() {
   {
     echo '# Written by wayland-whisper-toggle on/off. Do not edit by hand.'
     echo "$BIND_CMD"
+    if [ -n "$PAD_BIND_CMD" ]; then
+      echo "$PAD_BIND_CMD"
+    fi
   } > "$SWAYBIND"
   swaymsg -q "$BIND_CMD" 2>>"$LOG" || true
+  if [ -n "$PAD_BIND_CMD" ]; then
+    swaymsg -q "$PAD_BIND_CMD" 2>>"$LOG" || true
+  fi
 }
 
 unbind_mic() {
-  printf '%s\n' '# wayland-whisper master off — Ctrl+Space goes to the app.' > "$SWAYBIND"
+  printf '%s\n' \
+    '# wayland-whisper master off — Ctrl+Space and pad Enter go to the app.' > "$SWAYBIND"
   swaymsg -q 'unbindsym Ctrl+Space' 2>>"$LOG" || true
+  if [ -n "$PAD_DEVICE" ]; then
+    swaymsg -q "unbindsym --input-device=$PAD_DEVICE Return" 2>>"$LOG" || true
+  fi
 }
 
 master_off() {
@@ -62,7 +88,7 @@ master_off() {
   rm -f "$COOKIE"
   unbind_mic
   pulse off
-  echo "wayland-whisper: off (Ctrl+Space goes to the focused app)"
+  echo "wayland-whisper: off (Ctrl+Space and pad Enter go to the focused app)"
   notify "aus — Ctrl+Space ist frei"
 }
 
@@ -116,6 +142,47 @@ mic_toggle() {
   esac
 }
 
+inject_enter() {
+  if [ -p "$FIFO" ]; then
+    printf e > "$FIFO"
+  elif command -v wtype >/dev/null 2>&1; then
+    wtype -k Return
+  fi
+}
+
+# Pad Enter: stop the dictation, let the pending phrase be delivered
+# (transcribe + type), then press Enter — same flow as the old
+# ahakey pad-enter.sh ("wait out Whisper/wtype, close the mic, then Enter").
+send_phrase() {
+  if [ -f "$FLAG" ]; then
+    inject_enter
+    exit 0
+  fi
+  if [ "$(mic_state)" = "mic-on" ]; then
+    pid=$(mainpid)
+    if [ -n "$pid" ] && [ "$pid" != "0" ]; then
+      kill -USR1 "$pid" 2>>"$LOG" || true
+      # Wait until the daemon has delivered the pending phrase and closed the
+      # microphone, so Enter cannot land before the typed text (max ~60 s).
+      i=0
+      while [ "$(mic_state)" = "mic-on" ] && [ "$i" -lt 300 ]; do
+        sleep 0.2
+        i=$((i + 1))
+      done
+    fi
+  fi
+  pulse off
+  # Belt and braces: wait out any wtype burst.
+  i=0
+  while pgrep -x wtype >/dev/null 2>&1; do
+    i=$((i + 1))
+    [ "$i" -gt 100 ] && break
+    sleep 0.05
+  done
+  inject_enter
+  exit 0
+}
+
 case "${1:-}" in
   on|enable) master_on ;;
   off|disable) master_off ;;
@@ -123,6 +190,7 @@ case "${1:-}" in
     if [ -f "$FLAG" ]; then master_on; else master_off; fi
     ;;
   mic) mic_toggle ;;
+  send) send_phrase ;;
   status)
     if [ -f "$FLAG" ]; then echo "master: off"; else echo "master: on"; fi
     systemctl --user is-enabled "$SERVICE" 2>/dev/null || true
@@ -137,7 +205,7 @@ case "${1:-}" in
     ;;
   ""|mic-toggle) mic_toggle ;;
   *)
-    echo "usage: wayland-whisper-toggle {on|off|master|mic|status}" >&2
+    echo "usage: wayland-whisper-toggle {on|off|master|mic|send|status}" >&2
     exit 2
     ;;
 esac

@@ -44,10 +44,12 @@ this machine:
 
 - `wayland-whisper.service` — warm daemon, started with `--suspend-on-start`:
   the model stays loaded while the microphone stays closed.
-- `wayland-whisper-toggle` — `master|on|off` binds/releases `Ctrl+Space` in
-  Sway and enables/disables the service; `mic` (also the default action when
-  Sway runs the toggle) opens or closes the microphone only; `status` prints
-  master, service, microphone state and PID.
+- `wayland-whisper-toggle` — `master|on|off` binds/releases `Ctrl+Space` and
+  the AhaKey pad Enter key in Sway and enables/disables the service; `mic`
+  (also the default action when Sway runs the toggle) opens or closes the
+  microphone only; `send` (bound to the pad Enter key while master is on)
+  finishes the phrase being dictated, closes the microphone and presses
+  Enter; `status` prints master, service, microphone state and PID.
 - `Super+n` runs `wayland-whisper-toggle master`; `Ctrl+Space` runs the toggle
   with no argument. The microphone LED on the AhaKey pad breathes while the
   microphone is open (`ahakey.sh pulse breathing`) and is off otherwise;
@@ -56,7 +58,8 @@ this machine:
 `run --suspend-on-start --cookie <file>` writes its PID to `<file>` and waits;
 `wayland-whisper resume --cookie <file>` sends SIGCONT to open the microphone;
 SIGUSR1 closes it again while the process, the loaded model, and Whisper stay
-warm.
+warm — a phrase still being collected or transcribed is finished and typed
+first, then the microphone closes.
 
 ## License Notes
 

@@ -72,6 +72,28 @@ def run(arguments: argparse.Namespace) -> int:
         with open(arguments.cookie, "w", encoding="utf-8") as handle:
             handle.write(str(os.getpid()))
 
+    def close_microphone() -> None:
+        """Deliver a half-collected phrase, then close the microphone."""
+        if state["frames"] is None:
+            return
+        try:
+            phrase = collector.finish()
+            if phrase:
+                try:
+                    text = recognizer.transcribe(phrase)
+                except (RuntimeError, subprocess.SubprocessError) as error:
+                    print("wayland-whisper: %s" % error, file=sys.stderr)
+                    text = ""
+                if text:
+                    if arguments.output == "stdout":
+                        print(text, flush=True)
+                    else:
+                        type_text(text)
+        finally:
+            state["frames"].close()
+            state["frames"] = None
+            print("wayland-whisper: paused (microphone closed)", file=sys.stderr)
+
     print(
         "wayland-whisper: ready (microphone closed, waiting for resume)"
         if state["suspended"]
@@ -81,6 +103,11 @@ def run(arguments: argparse.Namespace) -> int:
 
     while True:
         if state["suspended"]:
+            # A suspend request can arrive while a phrase is being transcribed
+            # or typed; that work has already finished here. Deliver the
+            # phrase, then close the microphone -- otherwise it would stay
+            # open forever and the pad "send" key could not stop dictation.
+            close_microphone()
             time.sleep(0.02)
             continue
 
@@ -103,9 +130,7 @@ def run(arguments: argparse.Namespace) -> int:
             return 1
 
         if state["suspended"]:
-            frames.close()
-            state["frames"] = None
-            print("wayland-whisper: paused (microphone closed)", file=sys.stderr)
+            close_microphone()
             continue
 
         phrase = collector.add(frame, detector.probability(frame))
