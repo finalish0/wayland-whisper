@@ -1,0 +1,143 @@
+#!/bin/sh
+# Toggle / suspend / stop the warm wayland-whisper user service.
+#
+# Master switch: on | off (mirrors nerd-dictation-toggle):
+#   - "on"  enables the service (warm daemon, microphone still closed) and binds
+#           Ctrl+Space in Sway. "off" disables everything so Ctrl+Space goes to
+#           the focused application again.
+#   - Ctrl+Space (or no argument) opens/closes the microphone only.
+set -eu
+
+SERVICE=wayland-whisper.service
+BIN="${BIN:-$HOME/git/wayland-whisper/.venv/bin/wayland-whisper}"
+FLAGDIR="${FLAGDIR:-$HOME/.config/wayland-whisper}"
+FLAG="$FLAGDIR/disabled"
+LOG="${LOG:-$HOME/.local/state/wayland-whisper.log}"
+SWAYBIND="${SWAYBIND:-$HOME/.config/sway/wayland-whisper.conf}"
+TOGGLE_BIN="${TOGGLE_BIN:-$HOME/.local/bin/wayland-whisper-toggle}"
+RUNDIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+COOKIE="$RUNDIR/wayland-whisper.pid"
+AHAKEY="${AHAKEY:-$HOME/git/ahakey-x1/ahakey.sh}"
+BIND_CMD="bindsym Ctrl+Space exec --no-startup-id $TOGGLE_BIN"
+
+if [ -f "$FLAGDIR/env" ]; then
+  # shellcheck disable=SC1091
+  set -a
+  . "$FLAGDIR/env"
+  set +a
+fi
+
+mkdir -p "$(dirname "$LOG")" "$FLAGDIR" "$(dirname "$SWAYBIND")"
+
+# Quiet LED feedback on the AhaKey pad (same contract as nerd-dictation-toggle):
+# breathing while the microphone is open, off otherwise.
+pulse() {
+  if [ -x "$AHAKEY" ]; then
+    "$AHAKEY" pulse "$1" >/dev/null 2>&1 || true
+  fi
+}
+
+notify() {
+  notify-send -u low "Diktat" "$1" 2>/dev/null || true
+}
+
+mainpid() { systemctl --user show "$SERVICE" -p MainPID --value 2>/dev/null; }
+
+bind_mic() {
+  {
+    echo '# Written by wayland-whisper-toggle on/off. Do not edit by hand.'
+    echo "$BIND_CMD"
+  } > "$SWAYBIND"
+  swaymsg -q "$BIND_CMD" 2>>"$LOG" || true
+}
+
+unbind_mic() {
+  printf '%s\n' '# wayland-whisper master off — Ctrl+Space goes to the app.' > "$SWAYBIND"
+  swaymsg -q 'unbindsym Ctrl+Space' 2>>"$LOG" || true
+}
+
+master_off() {
+  date -Iseconds > "$FLAG"
+  systemctl --user disable --now "$SERVICE" 2>>"$LOG" || true
+  rm -f "$COOKIE"
+  unbind_mic
+  pulse off
+  echo "wayland-whisper: off (Ctrl+Space goes to the focused app)"
+  notify "aus — Ctrl+Space ist frei"
+}
+
+master_on() {
+  rm -f "$FLAG"
+  systemctl --user enable --now "$SERVICE" >>"$LOG" 2>&1 || true
+  bind_mic
+  pulse off
+  echo "wayland-whisper: on (Ctrl+Space is the mic; model loads ~15 s)"
+  notify "an — Ctrl+Space ist das Mikro"
+}
+
+mic_state() {
+  pid=$(mainpid)
+  if [ -z "$pid" ] || [ "$pid" = "0" ]; then
+    echo "service-off"
+    return
+  fi
+  if pgrep -P "$pid" -x parec >/dev/null 2>&1; then
+    echo "mic-on"
+  else
+    echo "mic-off"
+  fi
+}
+
+wait_cookie() {
+  i=0
+  while [ ! -s "$COOKIE" ] && [ "$i" -lt 60 ]; do
+    sleep 0.5
+    i=$((i + 1))
+  done
+}
+
+mic_toggle() {
+  case "$(mic_state)" in
+    service-off)
+      systemctl --user start "$SERVICE" >>"$LOG" 2>&1 || true
+      wait_cookie
+      "$BIN" resume --cookie "$COOKIE" 2>>"$LOG" || true
+      pulse breathing
+      ;;
+    mic-off)
+      "$BIN" resume --cookie "$COOKIE" 2>>"$LOG" || true
+      pulse breathing
+      ;;
+    mic-on)
+      pid=$(mainpid)
+      kill -USR1 "$pid" 2>>"$LOG" || true
+      pulse off
+      ;;
+  esac
+}
+
+case "${1:-}" in
+  on|enable) master_on ;;
+  off|disable) master_off ;;
+  master|toggle)
+    if [ -f "$FLAG" ]; then master_on; else master_off; fi
+    ;;
+  mic) mic_toggle ;;
+  status)
+    if [ -f "$FLAG" ]; then echo "master: off"; else echo "master: on"; fi
+    systemctl --user is-enabled "$SERVICE" 2>/dev/null || true
+    systemctl --user is-active "$SERVICE" 2>/dev/null || true
+    echo "mic: $(mic_state)"
+    pid=$(mainpid)
+    if [ -n "$pid" ] && [ "$pid" != "0" ]; then
+      echo "pid: $pid  state: $(ps -o stat= -p "$pid" 2>/dev/null || echo gone)"
+    else
+      echo "pid: none"
+    fi
+    ;;
+  ""|mic-toggle) mic_toggle ;;
+  *)
+    echo "usage: wayland-whisper-toggle {on|off|master|mic|status}" >&2
+    exit 2
+    ;;
+esac

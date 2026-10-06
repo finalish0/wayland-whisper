@@ -1,0 +1,13 @@
+[Unit]
+Description=Local Whisper dictation for Wayland (warm daemon, microphone closed while idle)
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/git/wayland-whisper/.venv/bin/wayland-whisper run --whisper-model %h/.local/share/nerd-dictation/models/ggml-small.bin --vad-model %h/.local/share/nerd-dictation/models/silero-vad.onnx --language de --suspend-on-start --cookie %t/wayland-whisper.pid
+ExecStopPost=/bin/rm -f %t/wayland-whisper.pid
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

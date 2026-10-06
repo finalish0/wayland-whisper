@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Generator
 
 from .vad import FRAME_SAMPLES, SAMPLE_RATE
 
 
-def pcm_frames() -> Iterator[bytes]:
+def pcm_frames() -> Generator[bytes, None, None]:
     """Yield 16 kHz, mono, signed-16-bit frames until the recorder stops."""
     command = [
         "parec",

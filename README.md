@@ -37,6 +37,27 @@ Speech begins after six voiced 32 ms frames and is committed after about 700
 ms of silence. `Ctrl+C` stops capture cleanly. Use `--output stdout` while
 testing to avoid typing into the focused application.
 
+## Desktop integration (Sway)
+
+`contrib/desktop/install.sh` installs the user service and the toggle used on
+this machine:
+
+- `wayland-whisper.service` — warm daemon, started with `--suspend-on-start`:
+  the model stays loaded while the microphone stays closed.
+- `wayland-whisper-toggle` — `master|on|off` binds/releases `Ctrl+Space` in
+  Sway and enables/disables the service; `mic` (also the default action when
+  Sway runs the toggle) opens or closes the microphone only; `status` prints
+  master, service, microphone state and PID.
+- `Super+n` runs `wayland-whisper-toggle master`; `Ctrl+Space` runs the toggle
+  with no argument. The microphone LED on the AhaKey pad breathes while the
+  microphone is open (`ahakey.sh pulse breathing`) and is off otherwise;
+  notifications are reserved for the master switch, never for the microphone.
+
+`run --suspend-on-start --cookie <file>` writes its PID to `<file>` and waits;
+`wayland-whisper resume --cookie <file>` sends SIGCONT to open the microphone;
+SIGUSR1 closes it again while the process, the loaded model, and Whisper stay
+warm.
+
 ## License Notes
 
 This repository's code is MIT licensed. It runs external programs and Python

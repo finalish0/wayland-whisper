@@ -10,6 +10,11 @@ import onnxruntime as ort
 
 
 FRAME_SAMPLES = 512
+# The streaming Silero v5 ONNX model expects 64 context samples from the
+# previous frame prepended to every 512-sample frame (576 total), otherwise it
+# returns 0.0 probabilities regardless of the input audio. Mirrors the working
+# implementation in the nerd-dictation fork (SileroVoiceActivity).
+CONTEXT_SAMPLES = 64
 SAMPLE_RATE = 16000
 
 
@@ -19,17 +24,25 @@ class SileroDetector:
     def __init__(self, model_path: str) -> None:
         self._session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
         self._state = np.zeros((2, 1, 128), dtype=np.float32)
+        self._context = np.zeros((1, CONTEXT_SAMPLES), dtype=np.float32)
         self._rate = np.array(SAMPLE_RATE, dtype=np.int64)
+
+    def reset(self) -> None:
+        """Forget the running state (used when the microphone is re-opened)."""
+        self._state = np.zeros((2, 1, 128), dtype=np.float32)
+        self._context = np.zeros((1, CONTEXT_SAMPLES), dtype=np.float32)
 
     def probability(self, pcm: bytes) -> float:
         if len(pcm) != FRAME_SAMPLES * 2:
             raise ValueError("Silero needs exactly one 512-sample PCM frame")
         samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+        model_input = np.concatenate((self._context, samples[np.newaxis, :]), axis=1)
         outputs = self._session.run(
             None,
-            {"input": samples[np.newaxis, :], "state": self._state, "sr": self._rate},
+            {"input": model_input, "state": self._state, "sr": self._rate},
         )
         self._state = outputs[1]
+        self._context = model_input[:, -CONTEXT_SAMPLES:]
         return float(outputs[0][0][0])
 
 
@@ -72,9 +85,13 @@ class PhraseCollector:
     def finish(self) -> bytes | None:
         """Return a pending phrase and reset the collector for the next one."""
         phrase = b"".join(self._parts) if self._recording else None
+        self.reset()
+        return phrase
+
+    def reset(self) -> None:
+        """Drop any half-collected phrase (used when the microphone is re-opened)."""
         self._parts.clear()
         self._lead.clear()
         self._voiced_frames = 0
         self._quiet_frames = 0
         self._recording = False
-        return phrase
