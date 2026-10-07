@@ -11,7 +11,7 @@ import time
 
 from . import __version__
 from .capture import pcm_frames
-from .output import type_text
+from .output import continued_text, type_text
 from .recognizer import WhisperRecognizer
 from .vad import PhraseCollector, SileroDetector
 
@@ -56,7 +56,7 @@ def run(arguments: argparse.Namespace) -> int:
     collector = PhraseCollector(threshold=arguments.threshold)
     recognizer = WhisperRecognizer(arguments.whisper_model, arguments.language)
 
-    state = {"suspended": bool(arguments.suspend_on_start), "frames": None}
+    state = {"suspended": bool(arguments.suspend_on_start), "frames": None, "typed": False}
 
     def on_suspend(_signum: int, _frame: object) -> None:
         state["suspended"] = True
@@ -72,6 +72,15 @@ def run(arguments: argparse.Namespace) -> int:
         with open(arguments.cookie, "w", encoding="utf-8") as handle:
             handle.write(str(os.getpid()))
 
+    def emit(text: str) -> None:
+        """Deliver one phrase, separating it from the previous one."""
+        text = continued_text(text, state["typed"])
+        if arguments.output == "stdout":
+            print(text, flush=True)
+        else:
+            type_text(text)
+        state["typed"] = True
+
     def close_microphone() -> None:
         """Deliver a half-collected phrase, then close the microphone."""
         if state["frames"] is None:
@@ -85,10 +94,7 @@ def run(arguments: argparse.Namespace) -> int:
                     print("wayland-whisper: %s" % error, file=sys.stderr)
                     text = ""
                 if text:
-                    if arguments.output == "stdout":
-                        print(text, flush=True)
-                    else:
-                        type_text(text)
+                    emit(text)
         finally:
             state["frames"].close()
             state["frames"] = None
@@ -115,6 +121,7 @@ def run(arguments: argparse.Namespace) -> int:
         if frames is None:
             collector.reset()
             detector.reset()
+            state["typed"] = False
             frames = pcm_frames()
             state["frames"] = frames
             print("wayland-whisper: listening", file=sys.stderr)
@@ -143,10 +150,7 @@ def run(arguments: argparse.Namespace) -> int:
             continue
         if not text:
             continue
-        if arguments.output == "stdout":
-            print(text, flush=True)
-        else:
-            type_text(text)
+        emit(text)
     return 0
 
 

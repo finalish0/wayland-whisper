@@ -8,6 +8,19 @@ import subprocess
 _SPACE_PREFIX = " \t\u00a0"
 
 
+def continued_text(text: str, continuing: bool) -> str:
+    """Separate consecutive phrases of one dictation with a space.
+
+    Every phrase is transcribed and stripped on its own, so the junction
+    between two phrases would otherwise be typed without a space
+    ("hat.Also"). The leading space added here is turned into a real
+    space keypress by wtype_arguments.
+    """
+    if continuing and text and not text[0].isspace():
+        return " " + text
+    return text
+
+
 def wtype_arguments(text: str) -> list[str]:
     """Build an argv that keeps initial spaces reliable in Wayland clients."""
     command = ["wtype", "-d", "8", "-s", "40", "-M", "shift", "-m", "shift"]

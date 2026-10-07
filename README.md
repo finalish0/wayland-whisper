@@ -34,8 +34,10 @@ python -m venv .venv
 ```
 
 Speech begins after six voiced 32 ms frames and is committed after about 700
-ms of silence. `Ctrl+C` stops capture cleanly. Use `--output stdout` while
-testing to avoid typing into the focused application.
+ms of silence. Consecutive phrases of one dictation are separated by a single
+space: each phrase is transcribed on its own, so the junction is re-inserted
+before the next phrase is typed. `Ctrl+C` stops capture cleanly. Use
+`--output stdout` while testing to avoid typing into the focused application.
 
 ## Desktop integration (Sway)
 
