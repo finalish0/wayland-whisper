@@ -8,12 +8,20 @@ import signal
 import subprocess
 import sys
 import time
+import wave
+from datetime import datetime
+
+# Pin numpy's OpenBLAS to one thread before numpy is imported: the decode
+# output of the fasterwhisper engine was measured to depend on it (2026-10-10
+# benchmark transcripts require it), while the whispercpp engine is
+# unaffected. Must run before numpy/OpenBLAS initialize.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 
 from . import __version__
 from .capture import pcm_frames
 from .output import continued_text, type_text
 from .recognizer import WhisperRecognizer
-from .vad import PhraseCollector, SileroDetector
+from .vad import SAMPLE_RATE, PhraseCollector, SileroDetector
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -21,7 +29,29 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command", required=True)
     run = commands.add_parser("run", help="capture, transcribe, and type speech")
-    run.add_argument("--whisper-model", required=True)
+    run.add_argument(
+        "--engine",
+        choices=("whispercpp", "fasterwhisper"),
+        default="whispercpp",
+        help="transcription backend (default: whispercpp)",
+    )
+    run.add_argument("--whisper-model", default="", help="GGML/GGUF model for the whispercpp engine")
+    run.add_argument(
+        "--faster-whisper-model",
+        default="",
+        help="CTranslate2 model directory for the fasterwhisper engine",
+    )
+    run.add_argument(
+        "--faster-whisper-compute",
+        default="int8",
+        help="CTranslate2 compute type for the fasterwhisper engine (default: int8)",
+    )
+    run.add_argument(
+        "--faster-whisper-threads",
+        type=int,
+        default=4,
+        help="CPU threads for the fasterwhisper engine (default: 4)",
+    )
     run.add_argument("--vad-model", required=True)
     run.add_argument("--language", default="de")
     run.add_argument("--threshold", type=float, default=0.50)
@@ -32,9 +62,46 @@ def build_parser() -> argparse.ArgumentParser:
         help="start with the microphone closed; SIGCONT ('resume') opens it",
     )
     run.add_argument("--cookie", default="", help="file the daemon writes its PID to")
+    run.add_argument(
+        "--phrase-dump",
+        default="",
+        help="directory to save every finished phrase to as a WAV (debugging/A-B tests)",
+    )
     resume = commands.add_parser("resume", help="open the microphone of a suspended daemon")
     resume.add_argument("--cookie", default="", help="PID file written by 'run --cookie'")
     return parser
+
+
+def build_recognizer(arguments: argparse.Namespace):
+    """Create the configured transcription backend (model stays in memory)."""
+    if arguments.engine == "fasterwhisper":
+        if not arguments.faster_whisper_model:
+            raise RuntimeError("--faster-whisper-model is required with --engine fasterwhisper")
+        from .faster_recognizer import FasterWhisperRecognizer
+
+        return FasterWhisperRecognizer(
+            arguments.faster_whisper_model,
+            arguments.language,
+            arguments.faster_whisper_compute,
+            arguments.faster_whisper_threads,
+        )
+    if not arguments.whisper_model:
+        raise RuntimeError("--whisper-model is required with --engine whispercpp")
+    return WhisperRecognizer(arguments.whisper_model, arguments.language)
+
+
+def dump_phrase_wav(directory: str, pcm: bytes) -> str:
+    """Write one finished phrase to a 16 kHz mono WAV and return the path."""
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(
+        directory, "phrase-%s.wav" % datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    )
+    with wave.open(path, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(SAMPLE_RATE)
+        handle.writeframes(pcm)
+    return path
 
 
 def _resume_pid(cookie: str) -> int:
@@ -54,7 +121,8 @@ def _resume_pid(cookie: str) -> int:
 def run(arguments: argparse.Namespace) -> int:
     detector = SileroDetector(arguments.vad_model)
     collector = PhraseCollector(threshold=arguments.threshold)
-    recognizer = WhisperRecognizer(arguments.whisper_model, arguments.language)
+    recognizer = build_recognizer(arguments)
+    print("wayland-whisper: engine=%s" % arguments.engine, file=sys.stderr)
 
     state = {"suspended": bool(arguments.suspend_on_start), "frames": None, "typed": False}
 
@@ -81,6 +149,28 @@ def run(arguments: argparse.Namespace) -> int:
             type_text(text)
         state["typed"] = True
 
+    def deliver(phrase: bytes) -> None:
+        """Transcribe one finished phrase, log its timing, and deliver it."""
+        dumped = ""
+        if arguments.phrase_dump:
+            dumped = " dump=%s" % os.path.basename(
+                dump_phrase_wav(arguments.phrase_dump, phrase)
+            )
+        started = time.perf_counter()
+        try:
+            text = recognizer.transcribe(phrase)
+        except (RuntimeError, subprocess.SubprocessError) as error:
+            print("wayland-whisper: %s" % error, file=sys.stderr)
+            return
+        elapsed = time.perf_counter() - started
+        print(
+            "wayland-whisper: inference engine=%s elapsed=%.2fs audio=%.2fs chars=%d%s"
+            % (arguments.engine, elapsed, len(phrase) / 2 / SAMPLE_RATE, len(text), dumped),
+            file=sys.stderr,
+        )
+        if text:
+            emit(text)
+
     def close_microphone() -> None:
         """Deliver a half-collected phrase, then close the microphone."""
         if state["frames"] is None:
@@ -88,13 +178,7 @@ def run(arguments: argparse.Namespace) -> int:
         try:
             phrase = collector.finish()
             if phrase:
-                try:
-                    text = recognizer.transcribe(phrase)
-                except (RuntimeError, subprocess.SubprocessError) as error:
-                    print("wayland-whisper: %s" % error, file=sys.stderr)
-                    text = ""
-                if text:
-                    emit(text)
+                deliver(phrase)
         finally:
             state["frames"].close()
             state["frames"] = None
@@ -143,14 +227,7 @@ def run(arguments: argparse.Namespace) -> int:
         phrase = collector.add(frame, detector.probability(frame))
         if phrase is None:
             continue
-        try:
-            text = recognizer.transcribe(phrase)
-        except (RuntimeError, subprocess.SubprocessError) as error:
-            print("wayland-whisper: %s" % error, file=sys.stderr)
-            continue
-        if not text:
-            continue
-        emit(text)
+        deliver(phrase)
     return 0
 
 

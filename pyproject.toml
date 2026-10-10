@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+faster = ["faster-whisper==1.2.1", "ctranslate2==4.8.2"]
 
 [project.scripts]
 wayland-whisper = "wayland_whisper.cli:main"

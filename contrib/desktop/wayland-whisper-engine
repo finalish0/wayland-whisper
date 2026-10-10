@@ -1,0 +1,84 @@
+#!/bin/bash
+# Switch the wayland-whisper user service between transcription engines for
+# A/B testing (systemd drop-in + restart; nothing else is touched).
+#
+# usage: wayland-whisper-engine show
+#        wayland-whisper-engine cpp  [--dump DIR]
+#        wayland-whisper-engine fw   [--dump DIR] [--compute TYPE] [--threads N]
+#        wayland-whisper-engine reset
+set -euo pipefail
+
+UNIT="wayland-whisper.service"
+DROPIN_DIR="$HOME/.config/systemd/user/$UNIT.d"
+DROPIN="$DROPIN_DIR/engine.conf"
+BIN="$HOME/git/wayland-whisper/.venv/bin/wayland-whisper"
+GGML="$HOME/.local/share/nerd-dictation/models/ggml-small.bin"
+FWMODEL="$HOME/.local/share/nerd-dictation/models/faster-whisper-small"
+VAD="$HOME/.local/share/nerd-dictation/models/silero-vad.onnx"
+
+mode="${1:-show}"
+shift || true
+dump="" compute="int8" threads="4"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dump) dump="${2:?--dump needs a directory}"; shift 2 ;;
+    --compute) compute="${2:?--compute needs a value}"; shift 2 ;;
+    --threads) threads="${2:?--threads needs a value}"; shift 2 ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+
+case "$mode" in
+  show)
+    if [ -f "$DROPIN" ]; then
+      echo "[drop-in active]"
+      cat "$DROPIN"
+    else
+      echo "[no drop-in; stock unit]"
+    fi
+    echo "[state: $(systemctl --user is-active "$UNIT" || true)]"
+    journalctl --user -u "$UNIT" --since "1 hour ago" -o cat \
+      | grep -o "wayland-whisper: engine=[a-z]*" | tail -1 || true
+    ;;
+  cpp|fw)
+    mkdir -p "$DROPIN_DIR"
+    if [ "$mode" = fw ]; then
+      line="ExecStart=$BIN run --engine fasterwhisper --faster-whisper-model $FWMODEL --faster-whisper-compute $compute --faster-whisper-threads $threads --whisper-model $GGML --vad-model $VAD --language de --suspend-on-start --cookie %t/wayland-whisper.pid"
+    else
+      line="ExecStart=$BIN run --engine whispercpp --whisper-model $GGML --vad-model $VAD --language de --suspend-on-start --cookie %t/wayland-whisper.pid"
+    fi
+    [ -n "$dump" ] && line="$line --phrase-dump $dump"
+    printf '[Service]\nExecStart=\n%s\n' "$line" > "$DROPIN"
+    systemctl --user daemon-reload
+    systemctl --user restart "$UNIT"
+    seen=""
+    for _ in $(seq 1 60); do
+      if journalctl --user -u "$UNIT" --since "45 seconds ago" -o cat \
+           | grep -q "wayland-whisper: engine="; then
+        seen="yes"
+        break
+      fi
+      sleep 0.5
+    done
+    if [ -z "$seen" ]; then
+      echo "[warn] no engine line within 30s; journal tail:" >&2
+      journalctl --user -u "$UNIT" -n 15 -o cat >&2
+      exit 1
+    fi
+    echo "[engine] $(journalctl --user -u "$UNIT" --since "45 seconds ago" -o cat | grep -o 'engine=[a-z]*' | tail -1)"
+    echo "[service] $(systemctl --user is-active "$UNIT")"
+    journalctl --user -u "$UNIT" --since "45 seconds ago" -o cat \
+      | grep -E "wayland-whisper: (ready|listening|paused)" | tail -2 || true
+    ;;
+  reset)
+    rm -f "$DROPIN"
+    rmdir "$DROPIN_DIR" 2>/dev/null || true
+    systemctl --user daemon-reload
+    systemctl --user restart "$UNIT"
+    echo "[reset to stock unit] [service: $(systemctl --user is-active "$UNIT")]"
+    ;;
+  *)
+    echo "usage: wayland-whisper-engine {show|cpp|fw|reset} [--dump DIR] [--compute TYPE] [--threads N]" >&2
+    exit 2
+    ;;
+esac

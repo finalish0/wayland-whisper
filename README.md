@@ -39,6 +39,34 @@ space: each phrase is transcribed on its own, so the junction is re-inserted
 before the next phrase is typed. `Ctrl+C` stops capture cleanly. Use
 `--output stdout` while testing to avoid typing into the focused application.
 
+## Engines
+
+`run` supports two local backends:
+
+- `--engine whispercpp` (default) — GGML models through `pywhispercpp`.
+- `--engine fasterwhisper` — CTranslate2 models through the optional `faster`
+  extra (`pip install -e '.[faster]'`), for example:
+
+```bash
+.venv/bin/wayland-whisper run \
+  --engine fasterwhisper \
+  --faster-whisper-model ~/.local/share/nerd-dictation/models/faster-whisper-small \
+  --vad-model ~/.local/share/nerd-dictation/models/silero-vad.onnx \
+  --language de --faster-whisper-threads 4
+```
+
+In the 2026-10-10 CPU benchmark on this machine, faster-whisper small INT8
+with 4 threads was ~1.4x faster than the whisper.cpp small default over 12
+full German sentences (up to ~3x on a short-clip tuning set) with the same
+word-error count. The client pins `OPENBLAS_NUM_THREADS=1` — the fw decode
+output was measured to depend on it, while the whisper.cpp path is
+unaffected — so manual runs should keep that environment. The daemon logs one
+`inference engine=... elapsed=... audio=... chars=...` line per phrase;
+`--phrase-dump DIR` additionally saves every finished phrase as a 16 kHz mono
+WAV for offline A/B tests. `contrib/desktop/wayland-whisper-engine` switches
+the user service between the two engines via a systemd drop-in (`show`,
+`cpp`, `fw`, `reset`).
+
 ## Desktop integration (Sway)
 
 `contrib/desktop/install.sh` installs the user service and the toggle used on

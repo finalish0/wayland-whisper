@@ -9,6 +9,7 @@ REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 BIN="${BIN:-$HOME/.local/bin}"
 
 install -Dm755 "$REPO/contrib/desktop/wayland-whisper-toggle" "$BIN/wayland-whisper-toggle"
+install -Dm755 "$REPO/contrib/desktop/wayland-whisper-engine" "$BIN/wayland-whisper-engine"
 install -Dm644 "$REPO/contrib/desktop/wayland-whisper.service" \
   "$HOME/.config/systemd/user/wayland-whisper.service"
 systemctl --user daemon-reload
@@ -16,6 +17,7 @@ systemctl --user daemon-reload
 cat <<EOF
 installed:
   $BIN/wayland-whisper-toggle
+  $BIN/wayland-whisper-engine
   ~/.config/systemd/user/wayland-whisper.service
 
 add to ~/.config/sway/config (once):
