@@ -44,7 +44,7 @@ before the next phrase is typed. `Ctrl+C` stops capture cleanly. Use
 
 ## Engines
 
-`run` supports two local backends:
+`run` supports three backends:
 
 - `--engine whispercpp` (default) — GGML models through `pywhispercpp`.
 - `--engine fasterwhisper` — CTranslate2 models through the optional `faster`
@@ -67,8 +67,72 @@ unaffected — so manual runs should keep that environment. The daemon logs one
 `inference engine=... elapsed=... audio=... chars=...` line per phrase;
 `--phrase-dump DIR` additionally saves every finished phrase as a 16 kHz mono
 WAV for offline A/B tests. `contrib/desktop/wayland-whisper-engine` switches
-the user service between the two engines via a systemd drop-in (`show`,
-`cpp`, `fw`, `reset`).
+the user service between the engines via a systemd drop-in (`show`, `cpp`,
+`fw`, `remote`, `reset`).
+
+### Remote engine (the GPU on `an`)
+
+`--engine remote` sends the recorded audio to the **admission gateway** on the
+GPU host and gets the transcript back. The transcription runs on the
+RX 7600 XT there, using `whisper-large-v3-turbo` (German, q5_0).
+
+```bash
+.venv/bin/wayland-whisper run \
+  --engine remote \
+  --remote-url http://192.168.188.51:8888/v1/audio/transcriptions \
+  --remote-model whisper-large-v3-turbo \
+  --vad-model ~/.local/share/nerd-dictation/models/silero-vad.onnx \
+  --language de
+```
+
+The bearer token is read from the file named by
+`WHISPER_REMOTE_API_KEY_FILE` (default
+`~/.config/wayland-whisper/remote-key`, mode 0600). It is the gateway's own
+token — the same one llama-swap uses. On the machine that runs this client,
+the token is provisioned by Ansible (`wayland_whisper_remote` role in
+`phcx-Server-Setup`), not copied by hand.
+
+**Always go through the gateway, never straight to llama-swap.** The gateway
+carries the VRAM reservation: the admission lock, the eviction of competing
+models, the preflight and the per-model start budget. A direct request to
+llama-swap on port 8889 skips all of it, and the speech child and the TTS
+model then evict each other. Port 8888 is the only public entry.
+
+### Automatic fallback
+
+`--engine remote` with fallback options keeps the dictation alive when the
+GPU host is unreachable:
+
+```bash
+--fallback-model ~/.local/share/nerd-dictation/models/faster-whisper-small \
+--fallback-compute int8 --fallback-threads 4
+```
+
+The rules:
+
+- The remote engine is tried for **every** phrase. The host may come back,
+  so the client must not get stuck on the local path.
+- The local engine is built **lazily**, on the first remote failure only.
+  Loading faster-whisper costs about 3 GB of RAM and seconds of start time; a
+  healthy remote path must not pay for it.
+- If both engines fail, the error names both, so a lost phrase is visible in
+  the journal instead of looking like silence.
+
+The journal line names the engine that actually did the work
+(`inference engine=remote ...` or `engine=local ...`).
+
+### Measured behaviour (2026-10-22)
+
+- Remote: 0.77 % word error rate over 12 FLEURS German clips (261 words),
+  median 2.07 s; live dictation phrases took 0.31–0.57 s.
+- Local fallback (faster-whisper small, INT8, 4 threads): 6.90 % WER, 1.73 s
+  warm; 5.72 s on the first fallback including the model load.
+- A healthy remote path costs about 114–120 MB of resident memory. The local
+  model is not loaded at all.
+
+The whisper child on the GPU host stays resident, so the first phrase after a
+long pause does not pay a model load — except right after a restart of the
+scheduler, where the cold start (about 30 s) falls into the first request.
 
 ## Desktop integration (Sway)
 
