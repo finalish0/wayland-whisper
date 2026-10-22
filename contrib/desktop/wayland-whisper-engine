@@ -22,6 +22,10 @@ SILENCE_FRAMES="${SILENCE_FRAMES:-20}"
 # The remote (AN) gateway: the transcription runs on the RX 7600 XT there.
 REMOTE_URL="${REMOTE_URL:-http://192.168.188.51:8888/v1/audio/transcriptions}"
 REMOTE_MODEL="${REMOTE_MODEL:-whisper-large-v3-turbo}"
+# The local fallback engine: used when the remote path fails (AN down, no
+# network). It is loaded lazily, on the first failure, so a healthy remote
+# path costs no RAM and no start-up time.
+FALLBACK_MODEL="${FALLBACK_MODEL:-$HOME/.local/share/nerd-dictation/models/faster-whisper-small}"
 # The bearer token lives in its own file, not in the unit: the unit is
 # readable by anyone who can read the systemd user directory.
 REMOTE_KEY_FILE="$HOME/.config/wayland-whisper/remote-key"
@@ -66,6 +70,12 @@ case "$mode" in
       printf '[Service]\nEnvironment=WHISPER_REMOTE_API_KEY_FILE=%s\n' "$REMOTE_KEY_FILE" > "$DROPIN_DIR/remote-env.conf"
       chmod 600 "$DROPIN_DIR/remote-env.conf"
       line="ExecStart=$BIN run --engine remote --remote-url $url --remote-model $model --vad-model $VAD --language de --silence-frames $SILENCE_FRAMES --suspend-on-start --cookie %t/wayland-whisper.pid"
+      if [ -d "$FALLBACK_MODEL" ]; then
+        line="$line --fallback-model $FALLBACK_MODEL --fallback-compute $compute --fallback-threads $threads"
+        echo "[fallback] $FALLBACK_MODEL"
+      else
+        echo "[warn] kein Fallback-Modell gefunden ($FALLBACK_MODEL) - ohne Rueckfallebene" >&2
+      fi
     else
       line="ExecStart=$BIN run --engine whispercpp --whisper-model $GGML --vad-model $VAD --language de --silence-frames $SILENCE_FRAMES --suspend-on-start --cookie %t/wayland-whisper.pid"
     fi

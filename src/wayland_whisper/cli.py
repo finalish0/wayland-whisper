@@ -58,6 +58,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="seconds to wait for the remote transcription (default: 120)",
     )
     run.add_argument(
+        "--fallback-model",
+        default="",
+        help="local CTranslate2 model used when the remote engine fails "
+             "(empty: no fallback)",
+    )
+    run.add_argument(
+        "--fallback-compute",
+        default="int8",
+        help="CTranslate2 compute type for the fallback model (default: int8)",
+    )
+    run.add_argument(
+        "--fallback-threads",
+        type=int,
+        default=4,
+        help="CPU threads for the fallback model (default: 4)",
+    )
+    run.add_argument(
         "--faster-whisper-model",
         default="",
         help="CTranslate2 model directory for the fasterwhisper engine",
@@ -99,18 +116,64 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _local_fallback_factory(arguments: argparse.Namespace):
+    """Build the local engine for the fallback path (called once, lazily).
+
+    The decode settings mirror the benchmarked configuration of the
+    2026-10-10 CPU comparison; changing them would invalidate that
+    measurement.
+    """
+
+    def factory():
+        from .faster_recognizer import FasterWhisperRecognizer
+
+        return FasterWhisperRecognizer(
+            arguments.fallback_model,
+            arguments.language,
+            arguments.fallback_compute,
+            arguments.fallback_threads,
+        )
+
+    return factory
+
+
+def log_inference(arguments: argparse.Namespace, recognizer, phrase: bytes,
+                  text: str, dumped: str = "") -> None:
+    """Write the per-phrase timing line to stderr.
+
+    The engine named here is the one that actually ran: with a fallback it
+    can be the local one even though "remote" is configured. The journal
+    must not claim the remote engine when the laptop did the work.
+    """
+    engine = arguments.engine
+    reporter = getattr(recognizer, "last_engine", None)
+    if callable(reporter):
+        engine = reporter() or engine
+    print(
+        "wayland-whisper: inference engine=%s elapsed=%.2fs audio=%.2fs chars=%d%s"
+        % (engine, arguments.elapsed, len(phrase) / 2 / SAMPLE_RATE, len(text), dumped),
+        file=sys.stderr,
+    )
+
+
 def build_recognizer(arguments: argparse.Namespace):
     """Create the configured transcription backend (model stays in memory)."""
     if arguments.engine == "remote":
         from .remote_recognizer import RemoteWhisperRecognizer
 
-        return RemoteWhisperRecognizer(
+        remote = RemoteWhisperRecognizer(
             arguments.remote_url,
             arguments.remote_model,
             arguments.language,
             arguments.remote_api_key or None,
             arguments.remote_timeout,
         )
+        if not arguments.fallback_model:
+            return remote
+        # The local engine is built lazily, on the first remote failure only.
+        from .fallback_recognizer import FallbackRecognizer
+
+        return FallbackRecognizer(remote, _local_fallback_factory(arguments))
     if arguments.engine == "fasterwhisper":
         if not arguments.faster_whisper_model:
             raise RuntimeError("--faster-whisper-model is required with --engine fasterwhisper")
@@ -203,11 +266,8 @@ def run(arguments: argparse.Namespace) -> int:
             print("wayland-whisper: %s" % error, file=sys.stderr)
             return
         elapsed = time.perf_counter() - started
-        print(
-            "wayland-whisper: inference engine=%s elapsed=%.2fs audio=%.2fs chars=%d%s"
-            % (arguments.engine, elapsed, len(phrase) / 2 / SAMPLE_RATE, len(text), dumped),
-            file=sys.stderr,
-        )
+        arguments.elapsed = elapsed
+        log_inference(arguments, recognizer, phrase, text, dumped)
         if text:
             emit(text)
 
