@@ -5,6 +5,7 @@
 # usage: wayland-whisper-engine show
 #        wayland-whisper-engine cpp  [--dump DIR]
 #        wayland-whisper-engine fw   [--dump DIR] [--compute TYPE] [--threads N]
+#        wayland-whisper-engine remote [--dump DIR] [--url URL] [--model NAME]
 #        wayland-whisper-engine reset
 set -euo pipefail
 
@@ -18,15 +19,23 @@ VAD="$HOME/.local/share/nerd-dictation/models/silero-vad.onnx"
 # Endpointing: frames of silence (32 ms each) that complete a phrase.
 # 20 frames = ~640 ms. Must match the stock unit in contrib/desktop.
 SILENCE_FRAMES="${SILENCE_FRAMES:-20}"
+# The remote (AN) gateway: the transcription runs on the RX 7600 XT there.
+REMOTE_URL="${REMOTE_URL:-http://192.168.188.51:8888/v1/audio/transcriptions}"
+REMOTE_MODEL="${REMOTE_MODEL:-whisper-large-v3-turbo}"
+# The bearer token lives in its own file, not in the unit: the unit is
+# readable by anyone who can read the systemd user directory.
+REMOTE_KEY_FILE="$HOME/.config/wayland-whisper/remote-key"
 
 mode="${1:-show}"
 shift || true
-dump="" compute="int8" threads="4"
+dump="" compute="int8" threads="4" url="$REMOTE_URL" model="$REMOTE_MODEL"
 while [ $# -gt 0 ]; do
   case "$1" in
     --dump) dump="${2:?--dump needs a directory}"; shift 2 ;;
     --compute) compute="${2:?--compute needs a value}"; shift 2 ;;
     --threads) threads="${2:?--threads needs a value}"; shift 2 ;;
+    --url) url="${2:?--url needs a value}"; shift 2 ;;
+    --model) model="${2:?--model needs a value}"; shift 2 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -43,10 +52,20 @@ case "$mode" in
     journalctl --user -u "$UNIT" --since "1 hour ago" -o cat \
       | grep -o "wayland-whisper: engine=[a-z]*" | tail -1 || true
     ;;
-  cpp|fw)
+  cpp|fw|remote)
     mkdir -p "$DROPIN_DIR"
     if [ "$mode" = fw ]; then
       line="ExecStart=$BIN run --engine fasterwhisper --faster-whisper-model $FWMODEL --faster-whisper-compute $compute --faster-whisper-threads $threads --whisper-model $GGML --vad-model $VAD --language de --silence-frames $SILENCE_FRAMES --suspend-on-start --cookie %t/wayland-whisper.pid"
+    elif [ "$mode" = remote ]; then
+      if [ ! -r "$REMOTE_KEY_FILE" ]; then
+        echo "[error] no readable key file: $REMOTE_KEY_FILE" >&2
+        exit 1
+      fi
+      # The token is read from the file by the service itself, so it never
+      # appears in the unit or in `systemctl show`.
+      printf '[Service]\nEnvironment=WHISPER_REMOTE_API_KEY_FILE=%s\n' "$REMOTE_KEY_FILE" > "$DROPIN_DIR/remote-env.conf"
+      chmod 600 "$DROPIN_DIR/remote-env.conf"
+      line="ExecStart=$BIN run --engine remote --remote-url $url --remote-model $model --vad-model $VAD --language de --silence-frames $SILENCE_FRAMES --suspend-on-start --cookie %t/wayland-whisper.pid"
     else
       line="ExecStart=$BIN run --engine whispercpp --whisper-model $GGML --vad-model $VAD --language de --silence-frames $SILENCE_FRAMES --suspend-on-start --cookie %t/wayland-whisper.pid"
     fi
@@ -74,14 +93,14 @@ case "$mode" in
       | grep -E "wayland-whisper: (ready|listening|paused)" | tail -2 || true
     ;;
   reset)
-    rm -f "$DROPIN"
+    rm -f "$DROPIN" "$DROPIN_DIR/remote-env.conf"
     rmdir "$DROPIN_DIR" 2>/dev/null || true
     systemctl --user daemon-reload
     systemctl --user restart "$UNIT"
     echo "[reset to stock unit] [service: $(systemctl --user is-active "$UNIT")]"
     ;;
   *)
-    echo "usage: wayland-whisper-engine {show|cpp|fw|reset} [--dump DIR] [--compute TYPE] [--threads N]" >&2
+    echo "usage: wayland-whisper-engine {show|cpp|fw|remote|reset} [--dump DIR] [--compute TYPE] [--threads N] [--url URL] [--model NAME]" >&2
     exit 2
     ;;
 esac

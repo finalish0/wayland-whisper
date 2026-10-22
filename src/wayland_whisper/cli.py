@@ -31,11 +31,32 @@ def build_parser() -> argparse.ArgumentParser:
     run = commands.add_parser("run", help="capture, transcribe, and type speech")
     run.add_argument(
         "--engine",
-        choices=("whispercpp", "fasterwhisper"),
+        choices=("whispercpp", "fasterwhisper", "remote"),
         default="whispercpp",
         help="transcription backend (default: whispercpp)",
     )
     run.add_argument("--whisper-model", default="", help="GGML/GGUF model for the whispercpp engine")
+    run.add_argument(
+        "--remote-url",
+        default="http://192.168.188.51:8888/v1/audio/transcriptions",
+        help="transcription endpoint of the remote (AN) gateway",
+    )
+    run.add_argument(
+        "--remote-model",
+        default="whisper-large-v3-turbo",
+        help="model name for the remote transcription route",
+    )
+    run.add_argument(
+        "--remote-api-key",
+        default="",
+        help="bearer token for the remote gateway (default: $WHISPER_REMOTE_API_KEY)",
+    )
+    run.add_argument(
+        "--remote-timeout",
+        type=float,
+        default=120.0,
+        help="seconds to wait for the remote transcription (default: 120)",
+    )
     run.add_argument(
         "--faster-whisper-model",
         default="",
@@ -80,6 +101,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def build_recognizer(arguments: argparse.Namespace):
     """Create the configured transcription backend (model stays in memory)."""
+    if arguments.engine == "remote":
+        from .remote_recognizer import RemoteWhisperRecognizer
+
+        return RemoteWhisperRecognizer(
+            arguments.remote_url,
+            arguments.remote_model,
+            arguments.language,
+            arguments.remote_api_key or None,
+            arguments.remote_timeout,
+        )
     if arguments.engine == "fasterwhisper":
         if not arguments.faster_whisper_model:
             raise RuntimeError("--faster-whisper-model is required with --engine fasterwhisper")
