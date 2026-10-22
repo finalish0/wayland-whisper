@@ -15,6 +15,9 @@ BIN="$HOME/git/wayland-whisper/.venv/bin/wayland-whisper"
 GGML="$HOME/.local/share/nerd-dictation/models/ggml-small.bin"
 FWMODEL="$HOME/.local/share/nerd-dictation/models/faster-whisper-small"
 VAD="$HOME/.local/share/nerd-dictation/models/silero-vad.onnx"
+# Endpointing: frames of silence (32 ms each) that complete a phrase.
+# 20 frames = ~640 ms. Must match the stock unit in contrib/desktop.
+SILENCE_FRAMES="${SILENCE_FRAMES:-20}"
 
 mode="${1:-show}"
 shift || true
@@ -43,9 +46,9 @@ case "$mode" in
   cpp|fw)
     mkdir -p "$DROPIN_DIR"
     if [ "$mode" = fw ]; then
-      line="ExecStart=$BIN run --engine fasterwhisper --faster-whisper-model $FWMODEL --faster-whisper-compute $compute --faster-whisper-threads $threads --whisper-model $GGML --vad-model $VAD --language de --suspend-on-start --cookie %t/wayland-whisper.pid"
+      line="ExecStart=$BIN run --engine fasterwhisper --faster-whisper-model $FWMODEL --faster-whisper-compute $compute --faster-whisper-threads $threads --whisper-model $GGML --vad-model $VAD --language de --silence-frames $SILENCE_FRAMES --suspend-on-start --cookie %t/wayland-whisper.pid"
     else
-      line="ExecStart=$BIN run --engine whispercpp --whisper-model $GGML --vad-model $VAD --language de --suspend-on-start --cookie %t/wayland-whisper.pid"
+      line="ExecStart=$BIN run --engine whispercpp --whisper-model $GGML --vad-model $VAD --language de --silence-frames $SILENCE_FRAMES --suspend-on-start --cookie %t/wayland-whisper.pid"
     fi
     [ -n "$dump" ] && line="$line --phrase-dump $dump"
     printf '[Service]\nExecStart=\n%s\n' "$line" > "$DROPIN"

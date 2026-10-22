@@ -4,7 +4,7 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/git/wayland-whisper/.venv/bin/wayland-whisper run --whisper-model %h/.local/share/whisper/ggml-small.bin --vad-model %h/.local/share/silero-vad/silero_vad.onnx --language de
+ExecStart=%h/git/wayland-whisper/.venv/bin/wayland-whisper run --whisper-model %h/.local/share/whisper/ggml-small.bin --vad-model %h/.local/share/silero-vad/silero_vad.onnx --language de --silence-frames 20
 Restart=on-failure
 RestartSec=2
 

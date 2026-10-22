@@ -55,6 +55,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--vad-model", required=True)
     run.add_argument("--language", default="de")
     run.add_argument("--threshold", type=float, default=0.50)
+    run.add_argument(
+        "--silence-frames",
+        type=int,
+        default=None,
+        help="frames of silence that complete a phrase (default: 22 = ~704 ms at 32 ms/frame)",
+    )
     run.add_argument("--output", choices=("wtype", "stdout"), default="wtype")
     run.add_argument(
         "--suspend-on-start",
@@ -120,7 +126,10 @@ def _resume_pid(cookie: str) -> int:
 
 def run(arguments: argparse.Namespace) -> int:
     detector = SileroDetector(arguments.vad_model)
-    collector = PhraseCollector(threshold=arguments.threshold)
+    collector_arguments = {"threshold": arguments.threshold}
+    if arguments.silence_frames is not None:
+        collector_arguments["silence_frames"] = arguments.silence_frames
+    collector = PhraseCollector(**collector_arguments)
     recognizer = build_recognizer(arguments)
     print("wayland-whisper: engine=%s" % arguments.engine, file=sys.stderr)
 

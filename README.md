@@ -33,8 +33,11 @@ python -m venv .venv
   --language de
 ```
 
-Speech begins after six voiced 32 ms frames and is committed after about 700
-ms of silence. Consecutive phrases of one dictation are separated by a single
+Speech begins after six voiced 32 ms frames and is committed after a run of
+silence, 22 frames (~700 ms) by default. `--silence-frames N` overrides the
+endpointing delay (32 ms per frame); the desktop unit ships 20 (~640 ms) as a
+compromise between perceived latency and not splitting words at breath pauses.
+Consecutive phrases of one dictation are separated by a single
 space: each phrase is transcribed on its own, so the junction is re-inserted
 before the next phrase is typed. `Ctrl+C` stops capture cleanly. Use
 `--output stdout` while testing to avoid typing into the focused application.
