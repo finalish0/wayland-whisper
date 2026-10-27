@@ -75,7 +75,7 @@ case "$mode" in
       # appears in the unit or in `systemctl show`.
       printf '[Service]\nEnvironment=WHISPER_REMOTE_API_KEY_FILE=%s\n' "$REMOTE_KEY_FILE" > "$DROPIN_DIR/remote-env.conf"
       chmod 600 "$DROPIN_DIR/remote-env.conf"
-      line="ExecStart=$BIN run --engine remote --remote-url $url --remote-model $model --remote-timeout $REMOTE_TIMEOUT --vad-model $VAD --language de --silence-frames $SILENCE_FRAMES --suspend-on-start --cookie %t/wayland-whisper.pid"
+      line="ExecStart=$BIN run --engine remote --remote-url $url --remote-model $model --remote-timeout $REMOTE_TIMEOUT --remote-audio auto --vad-model $VAD --language de --silence-frames $SILENCE_FRAMES --suspend-on-start --cookie %t/wayland-whisper.pid"
       if [ -d "$FALLBACK_MODEL" ]; then
         line="$line --fallback-model $FALLBACK_MODEL --fallback-compute $compute --fallback-threads $threads"
         echo "[fallback] $FALLBACK_MODEL"

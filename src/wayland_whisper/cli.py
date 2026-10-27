@@ -58,6 +58,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="seconds to wait for the remote transcription (default: 120)",
     )
     run.add_argument(
+        "--remote-audio",
+        choices=("auto", "pcm", "mp3"),
+        default="auto",
+        help="upload format: 'auto' sends WAV inside the gateway's /24 and "
+             "MP3 from everywhere else, 'pcm' always WAV, 'mp3' always MP3",
+    )
+    run.add_argument(
+        "--remote-mp3-bitrate",
+        type=int,
+        default=48000,
+        help="MP3 bit rate in bit/s for the compressed upload (default: 48000)",
+    )
+    run.add_argument(
         "--fallback-model",
         default="",
         help="local CTranslate2 model used when the remote engine fails "
@@ -149,9 +162,16 @@ def log_inference(arguments: argparse.Namespace, recognizer, phrase: bytes,
     reporter = getattr(recognizer, "last_engine", None)
     if callable(reporter):
         engine = reporter() or engine
+    extra = dumped
+    audio_reporter = getattr(recognizer, "last_audio", None)
+    if callable(audio_reporter):
+        label = audio_reporter()
+        if label:
+            # Which payload went out: pcm (LAN), mp3 (tunnel) or a fallback.
+            extra = " audio=%s%s" % (label, extra)
     print(
         "wayland-whisper: inference engine=%s elapsed=%.2fs audio=%.2fs chars=%d%s"
-        % (engine, arguments.elapsed, len(phrase) / 2 / SAMPLE_RATE, len(text), dumped),
+        % (engine, arguments.elapsed, len(phrase) / 2 / SAMPLE_RATE, len(text), extra),
         file=sys.stderr,
     )
 
@@ -167,6 +187,8 @@ def build_recognizer(arguments: argparse.Namespace):
             arguments.language,
             arguments.remote_api_key or None,
             arguments.remote_timeout,
+            audio=getattr(arguments, "remote_audio", "pcm"),
+            mp3_bit_rate=getattr(arguments, "remote_mp3_bitrate", 48000),
         )
         if not arguments.fallback_model:
             return remote
