@@ -29,6 +29,12 @@ FALLBACK_MODEL="${FALLBACK_MODEL:-$HOME/.local/share/nerd-dictation/models/faste
 # The bearer token lives in its own file, not in the unit: the unit is
 # readable by anyone who can read the systemd user directory.
 REMOTE_KEY_FILE="$HOME/.config/wayland-whisper/remote-key"
+# Seconds to wait for the remote transcription before the local fallback takes
+# over. The old default (120 s) leaves dictation frozen for minutes when the
+# gateway is unreachable (no VPN, no LAN): the daemon blocks in connect() and
+# cannot read the next phrase. 12 s covers every measured warm phrase (0.3-2 s)
+# and a loaded GPU, while a dead route falls back promptly.
+REMOTE_TIMEOUT="${REMOTE_TIMEOUT:-12}"
 
 mode="${1:-show}"
 shift || true
@@ -69,7 +75,7 @@ case "$mode" in
       # appears in the unit or in `systemctl show`.
       printf '[Service]\nEnvironment=WHISPER_REMOTE_API_KEY_FILE=%s\n' "$REMOTE_KEY_FILE" > "$DROPIN_DIR/remote-env.conf"
       chmod 600 "$DROPIN_DIR/remote-env.conf"
-      line="ExecStart=$BIN run --engine remote --remote-url $url --remote-model $model --vad-model $VAD --language de --silence-frames $SILENCE_FRAMES --suspend-on-start --cookie %t/wayland-whisper.pid"
+      line="ExecStart=$BIN run --engine remote --remote-url $url --remote-model $model --remote-timeout $REMOTE_TIMEOUT --vad-model $VAD --language de --silence-frames $SILENCE_FRAMES --suspend-on-start --cookie %t/wayland-whisper.pid"
       if [ -d "$FALLBACK_MODEL" ]; then
         line="$line --fallback-model $FALLBACK_MODEL --fallback-compute $compute --fallback-threads $threads"
         echo "[fallback] $FALLBACK_MODEL"
